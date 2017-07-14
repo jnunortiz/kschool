@@ -1,0 +1,310 @@
+---
+title: "House Price Prediction"
+author: "Jose Miguel Nuno de la Rosa Ortiz"
+date: "July 14, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r cars}
+library(knitr)
+library(lattice)
+library(plyr)
+library(ggplot2)
+library(reshape2)
+library(e1071)
+library(ranger)
+library(caret)
+library(Formula)
+library(ipred)
+library(corrplot)
+library(MASS)
+set.seed(123)
+```
+
+The aim of this study is to expose the characteristics of a house and how these characteristics influence in the price of a house. Later on, I will attempt to forecast the price of the house attending to the house characteristics. The data belongs to Idealista and is a sample of houses located in Las Rozas municipality. 
+
+```{r pressure, echo=TRUE}
+flat <- dget('residential.sale.flat.pickle')
+house <- dget('residential.sale.house.pickle')
+
+flat$ISFLAT <- rep(1, nrow(flat))
+house$ISFLAT <- rep(0, nrow(house))
+
+rozas <- rbind(flat, house)
+
+str(rozas)
+```
+
+There are two datasets, one belongs to flats exclusively and the other one to houses. I created an additional variable which determines wether the entry is a house or a flat, this will keep the characteristic of the house whenever I merge the data row-wise. 
+
+Many variables appear as numeric when they should be as factor but it does not matter; I will transform to factors the variables that have more than two levels because I will apply the function *dummyVars* that will transform each level of a variable into a dummry variable. For example, if I have the variable *language: Spanish, English, French*, then *dummyVar* will output *Spanish: 0,1; English: 0,1; French: 0,1;* leaving untouched the ones that are not factors. Therefore, I do not want to declare binary functions as factors yet, otherwise I will get those variables separated into two binary variables. 
+
+There are also some variables that do not vary at all since they are related to identification tags rather than characteristics; they are constant along the whole sample, hence, I will drop those variables.
+
+```{r, echo=TRUE}
+rozas$STATEID <- NULL
+rozas$LEVEL8ID <- NULL
+rozas$PROPERTYTYPEID <- NULL
+rozas$NEWDEVELOPMENTID <- NULL
+rozas$ISFROMBANKID <- NULL
+
+rozas$AREARANGETK <- as.factor(rozas$AREARANGETK)
+rozas$FLATLOCATIONID <- as.factor(rozas$FLATLOCATIONID)
+rozas$ENERGYCERTIFICATIONID <- as.factor(rozas$ENERGYCERTIFICATIONID)
+rozas$BUILTTYPEID <- as.factor(rozas$BUILTTYPEID)
+
+dummies <- dummyVars(PRICE ~ ., data = rozas)
+rozas_processed <- as.data.frame(predict(dummies, rozas))
+
+str(rozas_processed)
+```
+
+As we can observe, before we had a variable called *year* and now we have a binary variable per level of the variable *year*. There are some funny things though, like the year 2100, this clearly must be dropped. Now it is time to declare as factor the binary variables that we left as numeric before, as well as all the new binary variables which haven been declared numeric by default. 
+
+When I used the *dummyVar* function, it worked like an *lm* function where I specify the response variable and the explanatory ones, so besides the new binary variables we lost the column of the price of houses which I will have to attach again to have the data frame with full information.
+
+```{r, echo=TRUE}
+rozas_processed$HASPARKINGSPACEID <- as.factor(rozas$HASPARKINGSPACEID)
+rozas_processed$HASSWIMMINGPOOLID <- as.factor(rozas$HASSWIMMINGPOOLID)
+rozas_processed$HASTERRACEID <- as.factor(rozas$HASTERRACEID)
+rozas_processed$HASGARDENID <- as.factor(rozas$HASGARDENID)
+rozas_processed$HASLIFTID <- as.factor(rozas$HASLIFTID)
+rozas_processed$ISINVOICEID <- as.factor(rozas$ISINVOICEID)
+rozas_processed$ISFLAT <- as.factor(rozas$ISFLAT)
+rozas_processed$HASAIRCONDITIONINGID <- as.factor(rozas$HASAIRCONDITIONINGID)
+
+cols <- c("AREARANGETK.1", "AREARANGETK.2", "AREARANGETK.3", "AREARANGETK.4", "AREARANGETK.5", "AREARANGETK.6" ,"AREARANGETK.7",
+          "AREARANGETK.8", "AREARANGETK.9","AREARANGETK.10", "AREARANGETK.11", "AREARANGETK.12", "AREARANGETK.13", "AREARANGETK.14",
+          "AREARANGETK.15", "ENERGYCERTIFICATIONID.-1", "ENERGYCERTIFICATIONID.1", "ENERGYCERTIFICATIONID.2",
+          "ENERGYCERTIFICATIONID.3",  "ENERGYCERTIFICATIONID.4",  "ENERGYCERTIFICATIONID.5",  "ENERGYCERTIFICATIONID.6",
+          "ENERGYCERTIFICATIONID.7", "ENERGYCERTIFICATIONID.8", "ENERGYCERTIFICATIONID.9", "ENERGYCERTIFICATIONID.10", "BUILTTYPEID.1",
+          "BUILTTYPEID.2", "BUILTTYPEID.3", "FLATLOCATIONID.-1", "FLATLOCATIONID.1", "FLATLOCATIONID.2", "YEAR.2006", "YEAR.2007",
+          "YEAR.2008", "YEAR.2009", "YEAR.2010", "YEAR.2011", "YEAR.2012", "YEAR.2013", "YEAR.2014", "YEAR.2015", 
+          "YEAR.2016", "YEAR.2017")
+
+rozas_processed[cols] <- lapply(rozas_processed[cols], factor)
+
+rozas_processed$YEAR.2100 <- NULL
+
+rozas_2 <- data.frame(rozas$PRICE, rozas_processed)
+
+str(rozas_2)
+```
+
+Variables are now perfectly defined; they are either numeric or binary with two levels. Before splitting data into train/test sets, it is good idea to fit a linear model in the whole dataset to infere some information by observing the hypothesis testing of the coefficientes of the linear model.
+
+```{r}
+linear_model <- lm(rozas.PRICE ~ ., data = rozas_2)
+summary(linear_model)
+```
+
+As the summary says, there are four variables that were not defined due to non specified singularities. We can observe lots of interesting things here. Constructed area, probably the most obviously positively correlated variable, has a big positive coefficient, the number of rooms is also a significant variable with a much bigger positive coefficient (take into account that it is exponential data). 
+
+Now, there is even more interesting things; among extras, having parking and lift affect the most to the price of a house (I would not imagine living in a flat in the 8th floor and not having a lift). 
+
+Related to the economic cycle, houses built in 2006 and 2007 have a much higher coefficient than the rest of the years which is coincident with the real state sector boom, and we can observe that as we fall into the economic crisis years, the coefficients for those years decrease dramatically. However, years 2016 and 2017 seem to be years of price recovery in the real state sector in Las Rozas.
+
+Before going further on, we have to check correlations between variables and I will start with numeric variables.
+
+```{r}
+num_vars <- data.frame(rozas_2$CONSTRUCTEDAREA, rozas_2$ROOMSID, rozas_2$SQ_PRICE)
+corrmat <- round(cor(num_vars), 2)
+corrplot(corrmat, method = "circle")
+```
+<br>
+
+Constructed area and number of rooms are correlated and makes sense, since more area probably implies more rooms. Now I have to drop one of those since they can create collinearity, therefore, we have to check which one is more correlated to the response variable.
+
+```{r}
+num_vars2 <- data.frame(rozas_2$CONSTRUCTEDAREA, rozas_2$ROOMSID, rozas_2$rozas.PRICE)
+corrmat2 <- round(cor(num_vars2), 2)
+corrplot(corrmat2, method = "circle")
+```
+<br>
+
+Seems like the price is slightly more positively correlated with the number of rooms than the constructed area so we will pick the number of rooms variable.
+
+```{r}
+rozas_2$CONSTRUCTEDAREA <- NULL
+```
+
+Now I will check independency between categorical variables using the chi square test for independence. There are some variables that I suspect might not be independent and we need variables to be orthogonal. 
+
+```{r}
+tbl <- table(rozas_2$ROOMSID, rozas_2$HASPARKINGSPACEID)
+chisq.test(tbl)
+
+tbl2 <- table(rozas_2$ROOMSID, rozas_2$HASLIFTID)
+chisq.test(tbl2)
+
+tbl3 <- table(rozas_2$HASPARKINGSPACEID, rozas_2$HASLIFTID)
+chisq.test(tbl3)
+```
+
+Unfortunately, the number of rooms is not independent of a place having parking. In this municipality there are many houses, they all have parking space and probably many rooms too. If the house does not have parking space it is probably a flat which has less rooms. 
+
+Same happens with the number of rooms and having a lift. Probably a house with a big number of rooms in Las Rozas is not a flat, therefore, no lift. 
+
+Having parking space and having lift are orthogonal variables, we cannot reject the null hypothesis. 
+
+Now we have to drop either the variable number of rooms or the other two because they are both not independent of the number of rooms. We will check this by running an ANOVA test.
+
+```{r}
+summary(aov(rozas.PRICE ~ ROOMSID + HASPARKINGSPACEID + HASLIFTID, data = rozas_2))
+```
+
+The number of rooms is a very explanatory variable of the price of a house, not even the other two combined can explain more information about the price's variance. Therefore, we have to drop the other two variables. 
+
+```{r}
+rozas_2$HASPARKINGSPACEID <- NULL
+rozas_2$HASLIFTID <- NULL
+```
+
+I checked the most influential variables, the others, even if they are not very significant they do not have strength to introduce too much noise in the model. However, by restricting the learning algorithms, those non significant variables will probably remain out of the predictive model. Now it is time to split the data into train/test and start working on predicting the price of a house.
+
+```{r}
+# shuffle rows and disorder data randomly
+rows <- sample(nrow(rozas_2))
+rozas_shuffled <- rozas_2[rows,]
+
+# determine 80/20 split indices
+split <- round(nrow(rozas_shuffled) * 0.80)
+
+
+# set train and test sets
+rozas_train <- rozas_shuffled[1:split,]
+rozas_test <- rozas_shuffled[(split+1):nrow(rozas_shuffled),]
+```
+
+Next I will perform three fits: a linear model, a random forest and a boosted tree. I will use 1000x5 cross validation. Meaning, I will use the training set to split it into five different test sets and validate the model with each of those test partitions. I will repeat this process 1000 times to generate differente combinations of randomly generated partitions. 
+
+The linear model has a pre process tuning where zero variance variables are removed, data is centered and rescaled. The random model has some hyperparameters that have to be chosen without being clear which a priori values are better. *Mtry* is the most important one, it selects how many random variables the algorithm will try. Then I picked *tuneLength* = 1000 because it will try 1000 random combinations of *mtry* variables. 
+
+The boosted tree has *mstop* hyperparameters to set the number of iterations, the *maxdepth* hyperparameter which is how deep can the tree keep developing branches and the *nu* hyperparameter is shrinkage or learning rate. I left the values untouched so the algorithm will try a combination of iterations.  
+
+All the three models have the same training control object parameters, otherwise we would not be able to compare the models if we run different validation methods. I am using the training data to build the model, and later on, we will test these models on the test data and check the out of sample RMSE.
+
+```{r, message=FALSE, warning=FALSE}
+# Fit Linear model: model_lm
+model_lm <- train(
+  rozas.PRICE ~ ., rozas_train,
+  method = "lm",
+  preProcess = c('zv', 'center', 'scale'),
+  trControl = trainControl(
+    method = "cv", number = 5,
+    repeats = 1000, verboseIter = FALSE
+  )
+)
+
+# Fit Random Forest model: model_rf
+model_rf <- train(
+  rozas.PRICE ~ ., rozas_train,
+  method = "ranger",
+  tuneLength = 1000,
+  tuneGrid = data.frame(mtry = 1:10),
+  trControl = trainControl(
+    method = "cv", number = 5,
+    repeats = 1000, verboseIter = FALSE
+  )
+)
+
+
+# Fit Decision Boosted Tree: model_bt
+model_bt <- train(
+  rozas.PRICE ~ ., rozas_train,
+  method = "bstTree",
+  trControl = trainControl(
+    method = "cv", number = 5,
+    repeats = 1000, verboseIter = FALSE
+  )
+)
+
+# make list of models
+model_list <- list(lm = model_lm, rforest = model_rf, boostTree = model_bt)
+
+# Pass model_list to resamples(): resamples
+resamples <- resamples(model_list)
+
+# Summarize the results
+summary(resamples)
+```
+
+We can observe that despite boosted trees and random forest having a similar R squared, the RMSE is much lower in the random forest model. Seems like the boosted trees might have overfitted the training data set. 
+
+```{r}
+bwplot(resamples, metric = 'RMSE')
+bwplot(resamples, metric = 'Rsquared')
+```
+
+```{r}
+plot(model_rf)
+```
+
+We can see in the graph that as we increase the number of variables the RMSE of the random forest model decreases. So why not allow the random forest to pick more variables? because then we might be allowing the individual decision trees generated by the random forest to learn strange rules as a result of overfitting the data.
+
+```{r}
+model_rf$finalModel
+```
+
+```{r}
+summary(model_lm)
+```
+```{r}
+plot(model_bt)
+```
+
+If hyperparameters are not specified, it will try a combination of boosting iterations. In the random forest model I limited how much it could grow, I did not limit the amount of iterations that the boosting algorithm can do so it could result in overfitting out of sample. By default, the *maxdepth* hyperparameter is set up to 3.
+
+Now we will used the trained models to predict values using the characteristics of the house in the test data set. Then we will compute the out of sample RMSE by comparing these predicted results with the real results.
+
+```{r, message=FALSE, warning=FALSE}
+test_data <- rozas_test[-1]
+
+prediction_lm <- predict(model_lm, test_data)
+errors_lm <- rozas_test$rozas.PRICE - prediction_lm
+rmse_lm <- sqrt(mean(errors_lm^2))
+
+prediction_bt <- predict(model_bt, test_data)
+errors_bt <- rozas_test$rozas.PRICE - prediction_bt
+rmse_bt <- sqrt(mean(errors_bt^2))
+
+prediction_rf <- predict(model_rf, test_data)
+errors_rf <- rozas_test$rozas.PRICE - prediction_rf
+rmse_rf <- sqrt(mean(errors_rf^2))
+
+rmse <- data.frame(rmse_lm = rmse_lm, rmse_bt = rmse_bt, rmse_rf = rmse_rf)
+rmse
+```
+
+
+Seems like the boosting model did the best fit, followed closely by random forest. We can have a clearer vision of this by plotting and comparing the real value of price versus the fitted values of each model.
+
+```{r}
+predictions <- data.frame(Price = rozas_test$rozas.PRICE,
+                          linear_model_prediction = prediction_lm,
+                          random_forest_prediction = prediction_rf,
+                          boosting_prediction = prediction_bt,
+                          index = 1:nrow(rozas_test))
+
+toPlot <- melt(predictions, id.vars = c('Price', 'index'))
+
+ggplot() + 
+  geom_line(data = subset(toPlot, index <= 100), aes(y = value, x = index, col = variable))+
+  facet_grid(variable ~.) +
+  geom_line(data = subset(toPlot, index <= 100), aes(y = Price, x = index)) +
+  theme(legend.position="none", plot.title = element_text(hjust = 0.5)) +
+  ggtitle('REAL VS PREDICTED') + 
+  ylab('Price') + 
+  xlab('#Entry')
+```
+
+
+
+
+
+As it was expected, boosting performed the best. However, all the models performed quite well in out of sample data, probably the common training control settings had something to do with this. Many times quality of data plays a key roll, since extremely flexible models such as random forest or boosting can follow noise very closely. 
