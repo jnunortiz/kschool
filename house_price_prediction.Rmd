@@ -234,7 +234,7 @@ resamples <- resamples(model_list)
 summary(resamples)
 ```
 
-We can observe that despite boosted trees and random forest having a similar R squared, the RMSE is much lower in the random forest model. Seems like the boosted trees might have overfitted the training data set. 
+We can observe that despite boosted trees and random forest having a similar R squared, the RMSE is lower in the boost model. 
 
 ```{r}
 bwplot(resamples, metric = 'RMSE')
